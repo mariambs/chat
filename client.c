@@ -1,66 +1,354 @@
-#include <stdio.h>  
- #include <sys/types.h>  
- #include <sys/socket.h>  
- #include <netinet/in.h>  
- #include <netdb.h>  
- #include<string.h>  
- #include<stdlib.h>  
- void error(char *msg)  
- {  
- perror(msg);  
- exit(0);  
- }  
- int main(int argc,char *argv[])  
- {  
- int sockfd,portno,n,newsockfd;  
- struct sockaddr_in serv_addr;  
- struct hostent *server;  
- char buffer[256];  
- if(argc<3)  
- {  
- fprintf(stderr,"usage %s hostname port\n",argv[0]);  
- exit(0);  
- }  
- portno=atoi(argv[2]);  
- sockfd=socket(AF_INET,SOCK_STREAM,0);  
- if(sockfd<0)  
- {  
- error("error opening socket");  
- }  
- server=gethostbyname(argv[1]);  
- if(server==NULL)  
- {  
- fprintf(stderr,"error,no such host\n");  
- exit(0);  
- }  
- bzero((char*)&serv_addr,sizeof(serv_addr));  
- serv_addr.sin_family=AF_INET;  
- bcopy((char*)server->h_addr,(char*)&serv_addr.sin_addr.s_addr,server->h_length);  
- serv_addr.sin_port=htons(portno);  
- if(connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr))<0)  
- {  
- error("error connecting");  
- }  
- bzero(buffer,256);  
- printf("client->enter your message: %s ",buffer);  
- while  
- (fgets(buffer,256, stdin) != NULL){  
- n=write(sockfd,buffer,strlen(buffer));  
- if(n<0)  
- {  
- error("error writing to socket");  
- }  
- bzero(buffer,256);  
- n=read(sockfd,buffer,255);  
- if(n<0)  
- {  
- error("error reading rom socket");  
- }  
-  else {   
-   printf("server: ");   
-   fputs(buffer, stdout);   
-   printf("\n");   
-  }    
-  }   
-  return 0;     
- }    
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <termios.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+
+#define SERVERPORT 8080
+
+#define BUFFSIZE 1024
+#define ALIASLEN 32
+#define OPTLEN 16
+#define LINEBUFF 2048
+#define LENGTH 512
+
+struct PACKET {
+	char option[OPTLEN]; // instruction
+	char alias[ALIASLEN]; // client's username
+	char buff[BUFFSIZE]; // message size
+
+};
+
+struct USER {
+	int sockfd; // user's socket file descriptor: objets génériques avec des méthodes génériques (open(), close(), read(), write(), ...).
+	char alias[ALIASLEN]; // user's name
+};
+
+struct THREADINFO {
+	pthread_t thread_ID; // thread's pointer:récupérer l'ID d'un thread
+	int sockfd; // socket file descriptor
+};
+
+int isconnected, sockfd;
+
+char option[LINEBUFF];
+struct USER me;
+static struct termios oldt;
+
+void restore_terminal_settings(void){
+    tcsetattr(0, TCSANOW, &oldt);  /* Apply saved settings */
+}
+
+void disable_waiting_for_enter(void){
+    struct termios newt;
+
+    /* Make terminal read 1 char at a time */
+    tcgetattr(0, &oldt);  /* Save terminal settings */
+    newt = oldt;  /* Init new settings */
+    newt.c_lflag &= ~(ICANON | ECHO);  /* Change settings */
+    tcsetattr(0, TCSANOW, &newt);  /* Apply settings */
+    atexit(restore_terminal_settings); /* Make sure settings will be restored when program ends  */
+}
+
+char SERVERIP[32];
+
+int connect_with_server();
+void setalias(struct USER *me);  //set username
+void logout(struct USER *me);    //desconnecter de serveur
+void login(struct USER *me);     //login
+void *receiver(void *param);     //receive message
+void *receiverfile(void *param); //receive file
+void sendtoall(struct USER *me, char *msg); //broadcast
+void sendtoclient(struct USER *me, char * target, char *msg);//send to specific user
+
+int main(int argc, char **argv) {
+/*Largv est un tableau de pointeurs:Chacun de ces pointeurs pointe sur des chaînes de caractères
+argc indique simplement le nombre de chaînes de caractères sur lequel pointe argv.Par exemple, si argc vaut 2, cela veut dire que argv pointe sur deux chaînes de caractères*/
+
+	printf("Enter IP adress :");
+	scanf("%s",SERVERIP);
+
+	void sendfile(struct USER *me, char * target,char *msg);
+
+	int sockfd, aliaslen;
+	memset(&me, 0, sizeof(struct USER));
+/*3 arguments. Le premier est la zone mémoire que nous voulons remplir, le deuxième est le caractère de remplissage et le dernier définit la taille remplir une zone mémoire avec un caractère désiré.*/
+	while(gets(option)) {
+		if(!strncmp(option, "exit", 4)) {
+/*strncmp:permettait de comparer deux chaines de caractères sauf qu'elle permet de comparer au maximum les n premiers octets des 2 chaines de caractères. Le n est le troisième argument de la fonction, les deux premiers étant les deux chaines de caractères à comparer.*/
+			logout(&me);
+			break;
+		}
+	else if(!strncmp(option, "login", 5)) {
+		char *ptr = strtok(option, " ");
+		ptr = strtok(0, " ");//set ptr as username
+		memset(me.alias, 0, sizeof(char) * ALIASLEN);
+		if(ptr != NULL) {
+			aliaslen = strlen(ptr);//strlen:calcule la longeur du chaine de caractere
+			if(aliaslen > ALIASLEN) ptr[ALIASLEN] = 0;
+			strcpy(me.alias, ptr);//copy ptr in me.alias
+		}
+		else {
+			strcpy(me.alias, "Anonymous");//copy Anonymous to me.alias
+		}
+		login(&me);
+	}
+	else if(!strncmp(option, "change", 6)) {
+		char *ptr = strtok(option, " "); 
+//strtok() returns a pointer to the last token found in the string. A null pointer is returned if there are no tokens left to retrieve.
+		ptr = strtok(0, " ");
+		memset(me.alias, 0, sizeof(char) * ALIASLEN);
+		if(ptr != NULL) {
+			aliaslen = strlen(ptr);
+			if(aliaslen > ALIASLEN) ptr[ALIASLEN] = 0;
+			strcpy(me.alias, ptr);
+			setalias(&me);
+		}
+	}
+	else if(!strncmp(option, "specf", 5)) {
+		char *ptr = strtok(option, " ");
+		char temp[ALIASLEN];
+		ptr = strtok(0, " ");
+		memset(temp, 0, sizeof(char) * ALIASLEN);
+		if(ptr != NULL) {
+			aliaslen = strlen(ptr);
+			if(aliaslen > ALIASLEN) ptr[ALIASLEN] = 0;
+			strcpy(temp, ptr);
+			while(*ptr) ptr++; ptr++;
+			while(*ptr <= ' ') ptr++;
+			sendtoclient(&me, temp, ptr);
+		}
+	}
+	else if(!strncmp(option, "sfile", 5)) {
+		char *ptr = strtok(option, " ");
+		char temp[ALIASLEN];
+		ptr = strtok(0, " ");
+		memset(temp, 0, sizeof(char) * ALIASLEN);
+		if(ptr != NULL) {
+			aliaslen = strlen(ptr);
+			if(aliaslen > ALIASLEN) ptr[ALIASLEN] = 0;
+			strcpy(temp, ptr);
+			while(*ptr) ptr++; ptr++;
+			while(*ptr <= ' ') ptr++;
+			sendfile(&me, temp, ptr);
+		}
+	}
+	else if(!strncmp(option, "send", 4)) {
+		sendtoall(&me, &option[5]);
+	}
+	else if(!strncmp(option, "logout", 6)) {
+		logout(&me);
+	}
+	else fprintf(stderr, "Unknown option...\n");
+	}
+	return 0;
+}
+
+void login(struct USER *me) {
+	int recvd;
+	if(isconnected) {
+		fprintf(stderr, "You are already connected to server at %s:%d\n", SERVERIP, SERVERPORT);
+		return;
+	}
+	sockfd = connect_with_server();
+	if(sockfd >= 0) {
+		isconnected = 1;
+		me->sockfd = sockfd;
+		if(strcmp(me->alias, "Anonymous")) setalias(me);
+		printf("Logged in as %s\n", me->alias);
+		printf("Receiver started [%d]...\n", sockfd);
+		struct THREADINFO threadinfo;
+		pthread_create(&threadinfo.thread_ID, NULL, receiver, (void *)&threadinfo);
+	}
+	else {
+		fprintf(stderr, "Connection rejected...\n");
+	}
+}
+
+int connect_with_server() {
+	int newfd, error_ret;
+	struct sockaddr_in serv_addr;//pour communiquer via internet
+	struct hostent *to;//for host
+
+	/* generate address */
+	if((to = gethostbyname(SERVERIP))==NULL) {// gethostbyname: recieve info for host name
+		error_ret = errno;
+		fprintf(stderr, "gethostbyname() error...\n");
+		return error_ret;
+	}
+
+	/* open a socket */
+	if((newfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		error_ret = errno;
+		fprintf(stderr, "socket() error...\n");
+		return error_ret;
+	}
+
+	/* set initial values */
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_port = htons(SERVERPORT);
+	serv_addr.sin_addr = *((struct in_addr *)to->h_addr);
+	memset(&(serv_addr.sin_zero), 0, 8);
+
+	/* try to connect with server */
+	if(connect(newfd, (struct sockaddr *)&serv_addr, sizeof(struct sockaddr)) == -1) {
+		error_ret = errno;
+		fprintf(stderr, "connect() error...\n");
+		return error_ret;
+	}
+	else {
+		printf("Connected to server at %s:%d\n", SERVERIP, SERVERPORT);
+		return newfd;
+	}
+}
+
+
+void logout(struct USER *me) {
+	int sent;
+	struct PACKET packet;
+	if(!isconnected) {
+		fprintf(stderr, "You are not connected...\n");
+		return;
+	}
+	memset(&packet, 0, sizeof(struct PACKET));
+	strcpy(packet.option, "exit");
+	strcpy(packet.alias, me->alias);
+
+	/* send request to close this connetion */
+	sent = send(sockfd, (void *)&packet, sizeof(struct PACKET), 0);
+	isconnected = 0;
+}
+
+void setalias(struct USER *me) {
+	int sent;
+	struct PACKET packet;
+
+	if(!isconnected) {
+		fprintf(stderr, "You are not connected...\n");
+		return;
+	}
+
+	memset(&packet, 0, sizeof(struct PACKET));
+	strcpy(packet.option, "change");
+	strcpy(packet.alias, me->alias);
+
+	/* send request to close this connetion */
+	sent = send(sockfd, (void *)&packet, sizeof(struct PACKET), 0);//send packet
+}
+
+void *receiver(void *param) {
+	int recvd;
+	struct PACKET packet;
+	printf("Waiting here [%d]...\n", sockfd);
+
+	while(isconnected) {
+		recvd = recv(sockfd, (void *)&packet, sizeof(struct PACKET), 0);
+		if(!recvd) {
+			fprintf(stderr, "Connection lost from server...\n");
+			isconnected = 0;
+			close(sockfd);
+			break;
+		}
+		if(recvd > 0) {
+			printf("[%s]: %s\n", packet.alias, packet.buff);
+		}
+		memset(&packet, 0, sizeof(struct PACKET));
+	}
+	return NULL;
+}
+
+char revbuf[LENGTH];
+
+void sendtoall(struct USER *me, char *msg) {
+	int sent;
+	struct PACKET packet;
+
+	if(!isconnected) {
+		fprintf(stderr, "You are not connected...\n");
+		return;
+	}
+
+	msg[BUFFSIZE] = 0;
+	memset(&packet, 0, sizeof(struct PACKET));
+	strcpy(packet.option, "send");
+	strcpy(packet.alias, me->alias);
+	strcpy(packet.buff, msg);
+
+	/* send request to close this connetion */
+	sent = send(sockfd, (void *)&packet, sizeof(struct PACKET), 0);
+}
+
+void sendtoclient(struct USER *me, char *target, char *msg) {
+	int sent, targetlen;
+	struct PACKET packet;
+
+	if(target == NULL) {
+		return;
+	}
+
+	if(msg == NULL) {
+		return;
+	}
+
+	if(!isconnected) {
+		fprintf(stderr, "You are not connected...\n");
+		return;
+	}
+
+	msg[BUFFSIZE] = 0;
+	targetlen = strlen(target);
+	memset(&packet, 0, sizeof(struct PACKET));
+	strcpy(packet.option, "specf");
+	strcpy(packet.alias, me->alias);
+	strcpy(packet.buff, target);
+	strcpy(&packet.buff[targetlen], " ");
+	strcpy(&packet.buff[targetlen+1], msg);
+
+	/* send request to close this connetion */
+	sent = send(sockfd, (void *)&packet, sizeof(struct PACKET), 0);
+}
+
+void sendfile(struct USER *me, char *target, char *msg) {
+	int sent, targetlen;
+	struct PACKET packet;
+
+	if(target == NULL) {
+		return;
+	}
+
+	if(!isconnected) {
+		fprintf(stderr, "You are not connected...\n");
+		return;
+	}
+
+	char buffer[256];
+
+	/* Create file where data will be stored */
+	FILE *fp;
+	fp=fopen(msg, "r");
+
+	/*Displaying content of file on console*/
+	printf("%s",buffer);
+	fread(buffer, 1, 255, fp);
+   
+	msg[BUFFSIZE] = 0;
+	targetlen = strlen(target);
+	memset(&packet, 0, sizeof(struct PACKET));
+	strcpy(packet.option, "sfile");
+	strcpy(packet.alias, me->alias);
+	strcpy(packet.buff, target);
+	strcpy(&packet.buff[targetlen], " ");
+	strcpy(&packet.buff[targetlen+1], buffer);
+
+	/* send request to close this connetion */
+	sent = send(sockfd, (void *)&packet, sizeof(struct PACKET), 0);
+
+}
