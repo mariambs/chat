@@ -61,12 +61,19 @@ void disable_waiting_for_enter(void){
 char SERVERIP[32];
 
 int connect_with_server();
+
 void setalias(struct USER *me);  //set username
+
 void logout(struct USER *me);    //desconnecter de serveur
+
 void login(struct USER *me);     //login
+
 void *receiver(void *param);     //receive message
+
 void *receiverfile(void *param); //receive file
+
 void sendtoall(struct USER *me, char *msg); //broadcast
+
 void sendtoclient(struct USER *me, char * target, char *msg);//send to specific user
 
 int main(int argc, char **argv) {
