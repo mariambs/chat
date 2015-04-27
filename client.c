@@ -82,7 +82,8 @@ argc indique simplement le nombre de chaînes de caractères sur lequel pointe a
 
 	printf("Enter IP adress :");
 	scanf("%s",SERVERIP);
-
+sleep(1);
+printf("client ready\n");
 	void sendfile(struct USER *me, char * target,char *msg);
 
 	int sockfd, aliaslen;
